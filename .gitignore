@@ -1,0 +1,27 @@
+# Logs
+logs/
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# PID files
+*.pid
+
+# Large binary files — Prometheus and Alertmanager binaries
+prometheus/prometheus-2.52.0.linux-amd64/prometheus
+prometheus/prometheus-2.52.0.linux-amd64/promtool
+prometheus/prometheus-2.52.0.linux-amd64/data/
+prometheus/prometheus-2.52.0.linux-amd64/console_libraries/
+prometheus/prometheus-2.52.0.linux-amd64/consoles/
+
+# Alertmanager binary and data
+alertmanager/alertmanager
+alertmanager/amtool
+alertmanager/data/
+
+# Tar archives
+*.tar.gz
+*.gz

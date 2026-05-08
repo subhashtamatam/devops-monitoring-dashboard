@@ -1,0 +1,26 @@
+global:
+  smtp_smarthost: 'smtp.mail.yahoo.com:587'
+  smtp_from: 'subhash6609@yahoo.com'
+  smtp_auth_username: 'subhash6609@yahoo.com'
+  smtp_auth_password: 'REDACTED_ROTATED_PASSWORD'
+  smtp_require_tls: true
+
+route:
+  group_by: ['alertname']
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 1h
+  receiver: 'yahoo-email'
+
+receivers:
+  - name: 'yahoo-email'
+    email_configs:
+      - to: 'subhash6609@yahoo.com'
+        send_resolved: true
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname']
