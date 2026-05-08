@@ -1,0 +1,53 @@
+# .github/workflows/ci.yml
+# CI/CD Pipeline for DevOps Monitoring Dashboard
+# PG Final Year Major Project
+#
+# This pipeline runs automatically on every git push:
+#   1. Sets up Python environment
+#   2. Installs dependencies
+#   3. Runs all tests
+#   4. Reports pass/fail status
+
+name: DevOps Monitor CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flask
+          pip install prometheus-client
+          pip install requests
+          pip install pytest
+
+      - name: Run tests
+        run: |
+          pytest tests/test_app.py -v
+
+      - name: Show test summary
+        if: always()
+        run: |
+          echo "================================"
+          echo "CI Pipeline Complete"
+          echo "Project: DevOps Monitoring Dashboard"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "================================"
