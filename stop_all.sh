@@ -1,11 +1,10 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────
 # stop_all.sh
-# Stops all monitoring services cleanly
+# Stops all DevOps Monitoring services cleanly
 # ─────────────────────────────────────────────────────────────
 
 GREEN='\033[0;32m'
-RED='\033[0;31m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
@@ -17,7 +16,7 @@ echo -e "${CYAN}[STOP]${NC} Stopping all DevOps Monitoring services..."
 echo ""
 
 # Stop using saved PIDs
-for service in flask prometheus alertmanager; do
+for service in flask flask2 prometheus alertmanager; do
     PID_FILE="$LOG_DIR/$service.pid"
     if [ -f "$PID_FILE" ]; then
         PID=$(cat "$PID_FILE")
@@ -25,16 +24,21 @@ for service in flask prometheus alertmanager; do
             kill "$PID"
             echo -e "${GREEN}[OK]${NC} Stopped $service (PID: $PID)"
         else
-            echo -e "  → $service already stopped"
+            echo -e "  → $service was already stopped"
         fi
         rm -f "$PID_FILE"
     fi
 done
 
-# Also kill by port as backup
+# Stop Nginx
+sudo nginx -s stop 2>/dev/null && echo -e "${GREEN}[OK]${NC} Stopped Nginx load balancer"
+
+# Kill by port as backup
 fuser -k 5000/tcp 2>/dev/null
+fuser -k 5002/tcp 2>/dev/null
 fuser -k 9090/tcp 2>/dev/null
 fuser -k 9093/tcp 2>/dev/null
+fuser -k 8080/tcp 2>/dev/null
 
 echo ""
 echo -e "${GREEN}All services stopped.${NC}"
