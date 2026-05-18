@@ -1,21 +1,9 @@
-# app2.py
-# Secondary Flask Server — Port 5002
-# Used for Load Balancer demonstration in Phase 7
-# When primary server (port 5000) goes down,
-# Nginx automatically routes traffic here
-
 from flask import Flask, render_template_string, request
 from prometheus_client import Counter, Histogram, Summary, generate_latest, CONTENT_TYPE_LATEST
 from datetime import datetime
 import time
-import random
 
 app = Flask(__name__)
-
-# ──────────────────────────────────────────────
-# Prometheus Metrics — separate registry for server 2
-# Using different metric names to avoid conflicts
-# ──────────────────────────────────────────────
 
 REQUEST_COUNT = Counter(
     'app2_requests_total',
@@ -34,28 +22,20 @@ REQUEST_TIME = Summary(
     'Time spent processing on backup server'
 )
 
-# ──────────────────────────────────────────────
-# App State
-# ──────────────────────────────────────────────
-
 request_value = 0
 START_TIME    = time.time()
 
+
 def get_uptime():
-    seconds = int(time.time() - START_TIME)
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
+    secs = int(time.time() - START_TIME)
+    h, rem = divmod(secs, 3600)
+    m, s   = divmod(rem, 60)
     if h > 0:
         return f"{h}h {m}m {s}s"
     if m > 0:
         return f"{m}m {s}s"
     return f"{s}s"
 
-# ──────────────────────────────────────────────
-# HTML — Backup Server UI
-# Looks similar to main app but clearly marked as BACKUP
-# ──────────────────────────────────────────────
 
 HTML_PAGE = """
 <!DOCTYPE html>
@@ -117,7 +97,6 @@ HTML_PAGE = """
       font-family: 'Courier New', monospace; letter-spacing: 1px;
     }
 
-    /* ── Alert Banner ── */
     .alert-banner {
       background: #fef9c3;
       border-bottom: 2px solid #ca8a04;
@@ -192,7 +171,6 @@ HTML_PAGE = """
       pointer-events: none; user-select: none;
     }
 
-    /* ── Load balancer info box ── */
     .lb-info {
       background: #ffffff;
       border: 1px solid #e2e8f0;
@@ -251,7 +229,6 @@ HTML_PAGE = """
   </div>
 </header>
 
-<!-- Alert banner shown when serving traffic -->
 <div class="alert-banner">
   ⚡ Load Balancer Active — This is the BACKUP server (port 5002).
   Primary server (port 5000) may be down or under heavy load.
@@ -293,7 +270,6 @@ HTML_PAGE = """
 
   </div>
 
-  <!-- Load Balancer Info -->
   <div class="lb-info">
     <div class="lb-title">🔀 Load Balancer Configuration</div>
 
@@ -301,7 +277,6 @@ HTML_PAGE = """
       <span class="lb-label">Load Balancer</span>
       <span class="lb-value">Nginx · port 8080</span>
     </div>
-
     <div class="lb-row">
       <span class="lb-label">Primary Server</span>
       <span class="lb-value">
@@ -309,7 +284,6 @@ HTML_PAGE = """
         localhost:5000 (may be down)
       </span>
     </div>
-
     <div class="lb-row">
       <span class="lb-label">Backup Server</span>
       <span class="lb-value">
@@ -317,22 +291,18 @@ HTML_PAGE = """
         localhost:5002 (serving now)
       </span>
     </div>
-
     <div class="lb-row">
       <span class="lb-label">Strategy</span>
-      <span class="lb-value">Round Robin with Health Checks</span>
+      <span class="lb-value">Least Connections with Health Checks</span>
     </div>
-
     <div class="lb-row">
       <span class="lb-label">Health Check Interval</span>
       <span class="lb-value">Every 10 seconds</span>
     </div>
-
     <div class="lb-row">
       <span class="lb-label">Failover</span>
       <span class="lb-value">Automatic — zero manual intervention</span>
     </div>
-
   </div>
 
 </div>
@@ -346,9 +316,6 @@ HTML_PAGE = """
 </html>
 """
 
-# ──────────────────────────────────────────────
-# Routes
-# ──────────────────────────────────────────────
 
 @app.route('/')
 @REQUEST_TIME.time()
@@ -358,16 +325,15 @@ def home():
     REQUEST_COUNT.labels(endpoint='/').inc()
     request_value += 1
 
-    response = render_template_string(
+    res = render_template_string(
         HTML_PAGE,
         count        = request_value,
         current_time = datetime.now().strftime("%H:%M:%S"),
         uptime       = get_uptime(),
     )
 
-    duration = time.time() - start
-    REQUEST_LATENCY.labels(method=request.method, endpoint='/').observe(duration)
-    return response
+    REQUEST_LATENCY.labels(method=request.method, endpoint='/').observe(time.time() - start)
+    return res
 
 
 @app.route('/health')
@@ -376,11 +342,11 @@ def health():
     REQUEST_COUNT.labels(endpoint='/health').inc()
     request_value += 1
     return {
-        "status":   "OK",
-        "server":   "backup",
-        "port":     5002,
-        "uptime":   get_uptime(),
-        "time":     datetime.now().strftime("%H:%M:%S"),
+        "status": "OK",
+        "server": "backup",
+        "port":   5002,
+        "uptime": get_uptime(),
+        "time":   datetime.now().strftime("%H:%M:%S"),
     }
 
 
@@ -390,5 +356,5 @@ def metrics():
 
 
 if __name__ == '__main__':
-    print("[Backup Server] Starting on port 5002...")
+    print("[backup] starting on port 5002")
     app.run(host='0.0.0.0', port=5002, debug=False)

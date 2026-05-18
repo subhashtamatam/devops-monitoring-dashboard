@@ -1,17 +1,14 @@
-from flask import Flask, render_template_string, request, redirect, url_for
+from flask import Flask, render_template_string, request
 from analyzer import run_analysis
 from predictor import start_prediction_loop, latest_predictions
 from prometheus_client import Counter, Summary, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from datetime import datetime
+import math, random, time
 import threading
 import time
 import random
 
 app = Flask(__name__)
-
-# ──────────────────────────────────────────────
-# Prometheus Metrics
-# ──────────────────────────────────────────────
 
 REQUEST_COUNT = Counter(
     'app_requests_total',
@@ -36,20 +33,13 @@ ERROR_COUNT = Counter(
     ['endpoint']
 )
 
-# ──────────────────────────────────────────────
-# App State
-# ──────────────────────────────────────────────
-
 request_value = 0
 error_value   = 0
 START_TIME    = time.time()
 
-# ──────────────────────────────────────────────
-# Alert History
-# ──────────────────────────────────────────────
-
-alert_history = []
+alert_history     = []
 MAX_ALERT_HISTORY = 20
+
 
 def add_alert(source, name, severity, description):
     alert_history.insert(0, {
@@ -62,24 +52,17 @@ def add_alert(source, name, severity, description):
     if len(alert_history) > MAX_ALERT_HISTORY:
         alert_history.pop()
 
-# ──────────────────────────────────────────────
-# Helper — uptime formatter
-# ──────────────────────────────────────────────
 
 def get_uptime():
-    seconds = int(time.time() - START_TIME)
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
+    secs = int(time.time() - START_TIME)
+    h, rem = divmod(secs, 3600)
+    m, s   = divmod(rem, 60)
     if h > 0:
         return f"{h}h {m}m {s}s"
     if m > 0:
         return f"{m}m {s}s"
     return f"{s}s"
 
-# ──────────────────────────────────────────────
-# Shared CSS
-# ──────────────────────────────────────────────
 
 SHARED_CSS = """
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -168,7 +151,6 @@ SHARED_CSS = """
       margin-top: auto;
     }
 
-    /* ── Toast notification ── */
     .toast {
       position: fixed;
       top: 80px;
@@ -206,10 +188,6 @@ SHARED_CSS = """
     .toast-title { font-weight: 700; margin-bottom: 2px; }
     .toast-msg { font-size: 12px; opacity: 0.85; }
 """
-
-# ──────────────────────────────────────────────
-# HTML — Home Page
-# ──────────────────────────────────────────────
 
 HTML_PAGE = """
 <!DOCTYPE html>
@@ -374,10 +352,6 @@ HTML_PAGE = """
 </html>
 """
 
-# ──────────────────────────────────────────────
-# HTML — Root Cause Analyzer Page
-# ──────────────────────────────────────────────
-
 ANALYZE_PAGE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -532,17 +506,17 @@ ANALYZE_PAGE = """
       <div class="metric-card">
         <div class="metric-label">CPU Usage</div>
         <div class="metric-value">{{ "%.1f"|format(metrics.cpu) }}</div>
-        <div class="metric-unit">CPU percen</div>
+        <div class="metric-unit">CPU percent</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Memory</div>
         <div class="metric-value">{{ "%.1f"|format(metrics.memory) }}</div>
-        <div class="metric-unit">RAM used</div>
+        <div class="metric-unit">RAM used (MB)</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Avg Latency</div>
         <div class="metric-value">{{ "%.0f"|format(metrics.latency * 1000) }}</div>
-        <div class="metric-unit">response time</div>
+        <div class="metric-unit">milliseconds</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Request Rate</div>
@@ -559,17 +533,13 @@ ANALYZE_PAGE = """
 </main>
 
 <footer>
-  <span>Root Cause Analyzer · Phase 4A · PG Final Year Major Project</span>
+  <span>Root Cause Analyzer · PG Final Year Major Project</span>
   <span>Last analyzed: {{ timestamp }}</span>
 </footer>
 
 </body>
 </html>
 """
-
-# ──────────────────────────────────────────────
-# HTML — Predictive Alert System Page
-# ──────────────────────────────────────────────
 
 PREDICT_PAGE = """
 <!DOCTYPE html>
@@ -800,16 +770,12 @@ PREDICT_PAGE = """
 </main>
 
 <footer>
-  <span>Predictive Alert System · Phase 4B · PG Final Year Major Project</span>
+  <span>Predictive Alert System · PG Final Year Major Project</span>
   <span>Last analyzed: {{ timestamp }}</span>
 </footer>
 </body>
 </html>
 """
-
-# ──────────────────────────────────────────────
-# HTML — Alert History Page
-# ──────────────────────────────────────────────
 
 ALERTS_PAGE = """
 <!DOCTYPE html>
@@ -842,7 +808,6 @@ ALERTS_PAGE = """
     .trigger-sub   { font-size: 12px; color: #64748b; margin-bottom: 18px; }
     .trigger-btns  { display: flex; gap: 12px; flex-wrap: wrap; }
 
-    /* Buttons now submit a form — stay on same page */
     .trigger-form { display: inline; }
 
     .trigger-btn {
@@ -928,7 +893,6 @@ ALERTS_PAGE = """
   </div>
 </header>
 
-<!-- Toast notification — shown only when action just happened -->
 {% if toast %}
 <div class="toast toast-{{ toast.type }}">
   <div class="toast-icon">{{ toast.icon }}</div>
@@ -960,38 +924,31 @@ ALERTS_PAGE = """
     </div>
   </div>
 
-  <!-- Trigger panel — uses POST forms to stay on same page -->
   <div class="trigger-panel">
     <div class="trigger-title">⚡ Trigger Test Scenarios</div>
     <div class="trigger-sub">
       Use these buttons to simulate incidents. Results appear instantly in the alert log below — no page redirect.
     </div>
     <div class="trigger-btns">
-
       <form class="trigger-form" method="POST" action="/alerts/trigger">
         <input type="hidden" name="action" value="error"/>
         <button class="trigger-btn btn-error" type="submit">💥 Trigger 10 Errors</button>
       </form>
-
       <form class="trigger-form" method="POST" action="/alerts/trigger">
         <input type="hidden" name="action" value="load"/>
         <button class="trigger-btn btn-load" type="submit">📈 Trigger Traffic Spike</button>
       </form>
-
       <form class="trigger-form" method="POST" action="/alerts/trigger">
         <input type="hidden" name="action" value="slow"/>
         <button class="trigger-btn btn-slow" type="submit">🐢 Trigger Slow Requests</button>
       </form>
-
       <form class="trigger-form" method="POST" action="/alerts/trigger">
         <input type="hidden" name="action" value="test"/>
         <button class="trigger-btn btn-test" type="submit">✉️ Send Test Email Alert</button>
       </form>
-
     </div>
   </div>
 
-  <!-- Alert log -->
   <div class="box">
     <div class="box-title">📋 Alert Log — Last {{ alerts|length }} events</div>
 
@@ -1028,7 +985,7 @@ ALERTS_PAGE = """
 </main>
 
 <footer>
-  <span>Alert History · Phase 5 · PG Final Year Major Project</span>
+  <span>Alert History · PG Final Year Major Project</span>
   <span>Last refreshed: {{ current_time }}</span>
 </footer>
 
@@ -1036,34 +993,29 @@ ALERTS_PAGE = """
 </html>
 """
 
-# ──────────────────────────────────────────────
-# Routes
-# ──────────────────────────────────────────────
 
 @app.route('/')
 @REQUEST_TIME.time()
 def home():
     global request_value
-    start_time = time.time()
+    start = time.time()
     REQUEST_COUNT.labels(endpoint='/').inc()
     request_value += 1
 
-    refresh_interval = random.randint(8, 15)
     error_color = '#dc2626' if error_value > 0 else '#0f172a'
 
-    response = render_template_string(
+    res = render_template_string(
         HTML_PAGE,
         count            = request_value,
         errors           = error_value,
         current_time     = datetime.now().strftime("%H:%M:%S"),
         uptime           = get_uptime(),
-        refresh_interval = refresh_interval,
+        refresh_interval = random.randint(8, 15),
         error_color      = error_color,
     )
 
-    duration = time.time() - start_time
-    REQUEST_LATENCY.labels(method=request.method, endpoint='/').observe(duration)
-    return response
+    REQUEST_LATENCY.labels(method=request.method, endpoint='/').observe(time.time() - start)
+    return res
 
 
 @app.route('/health')
@@ -1102,10 +1054,10 @@ def slow():
 def analyze():
     result = run_analysis()
 
-    class MetricsObj:
+    class M:
         pass
 
-    m            = MetricsObj()
+    m            = M()
     m.cpu        = result['metrics']['cpu']
     m.memory     = result['metrics']['memory']
     m.latency    = result['metrics']['latency']
@@ -1128,15 +1080,13 @@ def analyze():
 
 @app.route('/predict')
 def predict():
-    import predictor as pred_module
-    preds       = pred_module.latest_predictions
-    data_points = preds.get('data_points', 0)
-    timestamp   = preds.get('timestamp', datetime.now().strftime("%d %b %Y, %H:%M:%S"))
+    import predictor as p
+    preds = p.latest_predictions
     return render_template_string(
         PREDICT_PAGE,
         predictions  = preds,
-        data_points  = data_points,
-        timestamp    = timestamp,
+        data_points  = preds.get('data_points', 0),
+        timestamp    = preds.get('timestamp', datetime.now().strftime("%d %b %Y, %H:%M:%S")),
         current_time = datetime.now().strftime("%H:%M:%S"),
     )
 
@@ -1153,10 +1103,6 @@ def alerts():
 
 @app.route('/alerts/trigger', methods=['POST'])
 def alerts_trigger():
-    """
-    Handles all trigger button actions via POST.
-    Stays on /alerts page — shows toast notification instead of redirect.
-    """
     global request_value, error_value
 
     action = request.form.get('action', '')
@@ -1167,38 +1113,22 @@ def alerts_trigger():
             REQUEST_COUNT.labels(endpoint='/error').inc()
             ERROR_COUNT.labels(endpoint='/error').inc()
             error_value += 1
-        add_alert(
-            source      = 'Manual Trigger',
-            name        = 'Error Storm Triggered',
-            severity    = 'critical',
-            description = '10 errors fired simultaneously to simulate an error surge scenario.'
-        )
-        toast = {
-            'type':  'error',
-            'icon':  '💥',
-            'title': 'Error Storm Triggered',
-            'msg':   '10 errors fired — check alert log below'
-        }
+        add_alert('Manual Trigger', 'Error Storm Triggered', 'critical',
+                  '10 errors fired simultaneously to simulate an error surge scenario.')
+        toast = {'type': 'error', 'icon': '💥',
+                 'title': 'Error Storm Triggered', 'msg': '10 errors fired — check alert log below'}
 
     elif action == 'load':
-        def fire_requests():
+        def fire():
             global request_value
             for _ in range(100):
                 REQUEST_COUNT.labels(endpoint='/').inc()
                 request_value += 1
-        threading.Thread(target=fire_requests, daemon=True).start()
-        add_alert(
-            source      = 'Manual Trigger',
-            name        = 'Traffic Spike Simulation',
-            severity    = 'warning',
-            description = '100 requests fired in background to simulate high traffic load.'
-        )
-        toast = {
-            'type':  'warning',
-            'icon':  '📈',
-            'title': 'Traffic Spike Triggered',
-            'msg':   '100 requests firing in background'
-        }
+        threading.Thread(target=fire, daemon=True).start()
+        add_alert('Manual Trigger', 'Traffic Spike Simulation', 'warning',
+                  '100 requests fired in background to simulate high traffic load.')
+        toast = {'type': 'warning', 'icon': '📈',
+                 'title': 'Traffic Spike Triggered', 'msg': '100 requests firing in background'}
 
     elif action == 'slow':
         def fire_slow():
@@ -1206,61 +1136,27 @@ def alerts_trigger():
             for _ in range(5):
                 REQUEST_COUNT.labels(endpoint='/slow').inc()
                 request_value += 1
-                delay = random.uniform(1.0, 2.5)
-                time.sleep(delay)
-                REQUEST_LATENCY.labels(method='GET', endpoint='/slow').observe(delay)
+                d = random.uniform(1.0, 2.5)
+                time.sleep(d)
+                REQUEST_LATENCY.labels(method='GET', endpoint='/slow').observe(d)
         threading.Thread(target=fire_slow, daemon=True).start()
-        add_alert(
-            source      = 'Manual Trigger',
-            name        = 'Slow Request Simulation',
-            severity    = 'warning',
-            description = '5 high-latency requests fired to simulate response time degradation.'
-        )
-        toast = {
-            'type':  'warning',
-            'icon':  '🐢',
-            'title': 'Slow Requests Triggered',
-            'msg':   '5 slow requests firing in background'
-        }
+        add_alert('Manual Trigger', 'Slow Request Simulation', 'warning',
+                  '5 high-latency requests fired to simulate response time degradation.')
+        toast = {'type': 'warning', 'icon': '🐢',
+                 'title': 'Slow Requests Triggered', 'msg': '5 slow requests firing in background'}
 
     elif action == 'test':
         try:
             from mailer import send_alert_email
-            send_alert_email(
-                metric    = 'cpu',
-                label     = 'CPU Usage',
-                current   = 45.0,
-                pred_2min = 72.0,
-                pred_5min = 88.0,
-                threshold = 80.0,
-                unit      = '%',
-                severity  = 'warning',
-            )
-            add_alert(
-                source      = 'Test Button',
-                name        = 'Test Alert Email Sent',
-                severity    = 'info',
-                description = 'Manual test email sent to subhash6609@yahoo.com successfully.'
-            )
-            toast = {
-                'type':  'success',
-                'icon':  '✉️',
-                'title': 'Test Email Sent',
-                'msg':   'Check subhash6609@yahoo.com inbox'
-            }
+            send_alert_email('cpu', 'CPU Usage', 45.0, 72.0, 88.0, 80.0, '%', 'warning')
+            add_alert('Test Button', 'Test Alert Email Sent', 'info',
+                      'Manual test email sent to subhash6609@yahoo.com successfully.')
+            toast = {'type': 'success', 'icon': '✉️',
+                     'title': 'Test Email Sent', 'msg': 'Check subhash6609@yahoo.com inbox'}
         except Exception as e:
-            add_alert(
-                source      = 'Test Button',
-                name        = 'Test Alert Failed',
-                severity    = 'critical',
-                description = f'Email send failed: {str(e)}'
-            )
-            toast = {
-                'type':  'error',
-                'icon':  '❌',
-                'title': 'Email Failed',
-                'msg':   str(e)
-            }
+            add_alert('Test Button', 'Test Alert Failed', 'critical',
+                      f'Email send failed: {str(e)}')
+            toast = {'type': 'error', 'icon': '❌', 'title': 'Email Failed', 'msg': str(e)}
 
     return render_template_string(
         ALERTS_PAGE,
@@ -1269,21 +1165,47 @@ def alerts_trigger():
         toast        = toast,
     )
 
+@app.route('/cpu-stress')
+def cpu_stress():
+    import math
+    # Heavier computation — runs 3 times to hold CPU high longer
+    total_primes = 0
+    for _ in range(3):          # repeat 3x = stays high ~6-9 seconds
+        limit = 500000          # bigger sieve than before (was 100000)
+        sieve = [True] * limit
+        for i in range(2, int(math.sqrt(limit)) + 1):
+            if sieve[i]:
+                for j in range(i*i, limit, i):
+                    sieve[j] = False
+        primes = [x for x in range(2, limit) if sieve[x]]
+        total_primes += len(primes)
+    return {'status': 'done', 'primes_found': total_primes}
+
+
+@app.route('/memory-stress')
+def memory_stress():
+    # Allocates ~50MB temporarily — simulates memory leak
+    big_list = ['x' * 1000 for _ in range(50000)]
+    time.sleep(2)   # hold it for 2 seconds
+    result = len(big_list)
+    del big_list    # release after
+    return {'status': 'done', 'items': result}
+
+@app.route('/slow')
+def slow_response():
+    # Simulates slow database query or API timeout
+    delay = random.uniform(2.0, 3.5)
+    time.sleep(delay)
+    return {'status': 'slow', 'delay_seconds': round(delay, 2)}
+
 
 @app.route('/metrics')
 def metrics():
     return generate_latest(), 200, {'Content-Type': CONTENT_TYPE_LATEST}
 
 
-# ──────────────────────────────────────────────
-# Start background prediction thread
-# ──────────────────────────────────────────────
-
 if __name__ == '__main__':
-    prediction_thread = threading.Thread(
-        target=start_prediction_loop,
-        daemon=True
-    )
-    prediction_thread.start()
-    print("[Predictor] Background thread started — collecting every 10s")
+    t = threading.Thread(target=start_prediction_loop, daemon=True)
+    t.start()
+    print("[app] started — predictor running in background")
     app.run(host='0.0.0.0', port=5000, debug=False)

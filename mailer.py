@@ -2,9 +2,12 @@ import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
 
-SENDER_EMAIL = "subhash6609@yahoo.com"
-APP_PASSWORD = "kzcrklmjtmxawecv"
+SENDER_EMAIL   = "subhash6609@yahoo.com"
+APP_PASSWORD   = "kzcrklmjtmxawecv"
 RECEIVER_EMAIL = "subhash6609@yahoo.com"
+
+SMTP_HOST = "smtp.mail.yahoo.com"
+SMTP_PORT = 587
 
 
 def send_alert_email(metric, label, current,
@@ -13,38 +16,30 @@ def send_alert_email(metric, label, current,
 
     subject = f"[{severity.upper()} ALERT] {label} Risk Detected"
 
-    body = f"""
-Predictive Monitoring Alert
-
-Metric: {label}
-Current Value: {current}{unit}
-
-Prediction after 2 mins: {pred_2min}{unit}
-Prediction after 5 mins: {pred_5min}{unit}
-
-Threshold: {threshold}{unit}
-
-Severity: {severity.upper()}
-Time: {datetime.now()}
+    body = f"""Predictive Monitoring Alert
+-----------------------------
+Metric       : {label}
+Current      : {current}{unit}
+In 2 minutes : {pred_2min}{unit}
+In 5 minutes : {pred_5min}{unit}
+Threshold    : {threshold}{unit}
+Severity     : {severity.upper()}
+Time         : {datetime.now().strftime("%d %b %Y, %H:%M:%S")}
+-----------------------------
+Sent by DevOps Monitoring Dashboard
 """
 
     msg = MIMEText(body)
     msg["Subject"] = subject
-    msg["From"] = SENDER_EMAIL
-    msg["To"] = RECEIVER_EMAIL
+    msg["From"]    = SENDER_EMAIL
+    msg["To"]      = RECEIVER_EMAIL
 
     try:
-        server = smtplib.SMTP("smtp.mail.yahoo.com", 587)
+        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
         server.starttls()
         server.login(SENDER_EMAIL, APP_PASSWORD)
-        server.sendmail(
-            SENDER_EMAIL,
-            RECEIVER_EMAIL,
-            msg.as_string()
-        )
+        server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
         server.quit()
-
-        print(f"[EMAIL SENT] {label}")
-
+        print(f"[mailer] alert sent — {label} ({severity})")
     except Exception as e:
-        print("Email failed:", e)
+        print(f"[mailer] failed — {e}")
