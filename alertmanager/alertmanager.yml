@@ -5,22 +5,125 @@ global:
   smtp_auth_password: 'REDACTED_ROTATED_PASSWORD'
   smtp_require_tls: true
 
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
 route:
   group_by: ['alertname']
   group_wait: 10s
   group_interval: 30s
-  repeat_interval: 1h
-  receiver: 'yahoo-email'
+  repeat_interval: 5m
+  receiver: 'email-alert'
 
 receivers:
-  - name: 'yahoo-email'
+  - name: 'email-alert'
     email_configs:
-      - to: 'subhash6609@yahoo.com'
+      - to: 'YOUR_YAHOO_EMAIL@yahoo.com'
         send_resolved: true
+        headers:
+          Subject: >-
+            {{ if eq .Status "firing" }}
+            [ALERT FIRING] {{ .GroupLabels.alertname }} — DevOps Monitor
+            {{ else }}
+            [RESOLVED] {{ .GroupLabels.alertname }} — DevOps Monitor
+            {{ end }}
+        html: |
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <style>
+              body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 20px; }
+              .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+              .header-firing  { background: #C0392B; color: white; padding: 24px 28px; }
+              .header-resolved{ background: #27AE60; color: white; padding: 24px 28px; }
+              .header h1 { margin: 0; font-size: 22px; }
+              .header p  { margin: 6px 0 0; font-size: 14px; opacity: 0.9; }
+              .body { padding: 24px 28px; }
+              .label { font-size: 11px; font-weight: bold; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+              .value { font-size: 16px; color: #222; margin-bottom: 16px; }
+              .value.big { font-size: 20px; font-weight: bold; color: #C0392B; }
+              .value.green { color: #27AE60; }
+              .divider { border: none; border-top: 1px solid #eee; margin: 16px 0; }
+              .row { display: flex; gap: 24px; margin-bottom: 8px; }
+              .footer { background: #f9f9f9; padding: 16px 28px; font-size: 12px; color: #aaa; border-top: 1px solid #eee; }
+              .badge-warning  { display: inline-block; background: #E67E22; color: white; padding: 3px 10px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+              .badge-critical { display: inline-block; background: #C0392B; color: white; padding: 3px 10px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+              .badge-resolved { display: inline-block; background: #27AE60; color: white; padding: 3px 10px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
 
-inhibit_rules:
-  - source_match:
-      severity: 'critical'
-    target_match:
-      severity: 'warning'
-    equal: ['alertname']
+              {{ if eq .Status "firing" }}
+              <div class="header header-firing">
+                <h1>⚠ Alert Firing — {{ .GroupLabels.alertname }}</h1>
+                <p>DevOps Monitoring Dashboard — Real-Time Alert Notification</p>
+              </div>
+              {{ else }}
+              <div class="header header-resolved">
+                <h1>✅ Alert Resolved — {{ .GroupLabels.alertname }}</h1>
+                <p>DevOps Monitoring Dashboard — The condition has returned to normal</p>
+              </div>
+              {{ end }}
+
+              <div class="body">
+
+                {{ range .Alerts }}
+
+                <div class="label">Alert Name</div>
+                <div class="value big">{{ .Labels.alertname }}</div>
+
+                <div class="label">Status</div>
+                <div class="value">
+                  {{ if eq .Status "firing" }}
+                  <span class="badge-{{ .Labels.severity }}">{{ upper .Status }} 🔴</span>
+                  {{ else }}
+                  <span class="badge-resolved">RESOLVED ✅</span>
+                  {{ end }}
+                </div>
+
+                <div class="label">What Happened</div>
+                <div class="value">{{ .Annotations.description }}</div>
+
+                <div class="label">Summary</div>
+                <div class="value">{{ .Annotations.summary }}</div>
+
+                <hr class="divider">
+
+                <div class="label">Server</div>
+                <div class="value">{{ .Labels.instance }}</div>
+
+                <div class="label">Severity</div>
+                <div class="value">{{ upper .Labels.severity }}</div>
+
+                <div class="label">Alert Started</div>
+                <div class="value">{{ .StartsAt.Format "02 Jan 2006, 15:04:05" }}</div>
+
+                {{ if .EndsAt }}
+                <div class="label">Alert Ended</div>
+                <div class="value">{{ .EndsAt.Format "02 Jan 2006, 15:04:05" }}</div>
+                {{ end }}
+
+                <hr class="divider">
+
+                {{ end }}
+
+                <p style="font-size:13px; color:#555; margin-top:8px;">
+                  Check your monitoring dashboard for full details:<br>
+                  <strong>Flask Dashboard:</strong> http://localhost:5000<br>
+                  <strong>Grafana:</strong> http://localhost:3000<br>
+                  <strong>Alertmanager:</strong> http://localhost:9093
+                </p>
+
+              </div>
+
+              <div class="footer">
+                Sent automatically by DevOps Monitoring Dashboard &nbsp;|&nbsp;
+                Real-Time Application Performance Monitoring &nbsp;|&nbsp;
+                Do not reply to this email
+              </div>
+
+            </div>
+          </body>
+          </html>
