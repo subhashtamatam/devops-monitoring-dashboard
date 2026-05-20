@@ -7,6 +7,7 @@ import math, random, time
 import threading
 import time
 import random
+import requests
 
 app = Flask(__name__)
 
@@ -210,7 +211,7 @@ HTML_PAGE = """
     .page-title h2 { font-size: 24px; font-weight: 800; color: #0f172a; }
     .page-title p  { font-size: 14px; color: #64748b; margin-top: 6px; }
 
-    .cards { display: grid; grid-template-columns: repeat(4, 260px); gap: 22px; }
+    .cards { display: grid; grid-template-columns: repeat(5, 220px); gap: 18px; }
 
     .card {
       background: #ffffff; border-radius: 18px;
@@ -232,6 +233,7 @@ HTML_PAGE = """
     .card-uptime::before  { background: linear-gradient(90deg, #1d4ed8, #60a5fa); }
     .card-req::before     { background: linear-gradient(90deg, #7c3aed, #a78bfa); }
     .card-error::before   { background: linear-gradient(90deg, #dc2626, #f87171); }
+    .card-rate::before    { background: linear-gradient(90deg, #0891b2, #38bdf8); }
 
     .card-icon {
       width: 48px; height: 48px; border-radius: 14px;
@@ -243,6 +245,7 @@ HTML_PAGE = """
     .icon-blue   { background: #eff6ff; }
     .icon-purple { background: #f5f3ff; }
     .icon-red    { background: #fef2f2; }
+    .icon-teal   { background: #ecfeff; }
 
     .card-label {
       font-size: 11px; font-weight: 700;
@@ -334,6 +337,24 @@ HTML_PAGE = """
       <div class="card-sub">HTTP 500 responses</div>
       <div class="card-watermark">⚠</div>
     </div>
+    <div class="card card-rate">
+      <div class="card-icon icon-teal">📊</div>
+      <div class="card-label">Live Req / sec</div>
+      {% if req_rate is none %}
+      <div class="card-value" style="font-size:16px; color:#94a3b8;">Prometheus<br>offline</div>
+      <div class="card-sub">start Prometheus to enable</div>
+      {% else %}
+      <div class="card-value" style="color:#0891b2;">{{ "%.3f"|format(req_rate) }}</div>
+      <div class="card-sub">from Prometheus · 2m avg</div>
+      {% endif %}
+      <div class="card-watermark">📊</div>
+    </div>
+  </div>
+
+  <div style="font-size:11px; color:#94a3b8; text-align:center; margin-top:-16px;">
+    📡 <strong style="color:#0891b2;">Live Req/sec</strong> is fetched directly from
+    <strong>Prometheus</strong> via PromQL on every page load —
+    demonstrating the full <em>Flask → Prometheus → Flask UI</em> monitoring loop.
   </div>
 
   <div class="btn-row">
@@ -994,6 +1015,23 @@ ALERTS_PAGE = """
 """
 
 
+def _fetch_req_rate():
+    """Fetch live request rate from Prometheus for the home page."""
+    try:
+        res = requests.get(
+            "http://localhost:9090/api/v1/query",
+            params={"query": 'rate(app_requests_total{job="flask-app"}[2m])'},
+            timeout=2,
+        )
+        results = res.json().get("data", {}).get("result", [])
+        if results:
+            total = sum(float(r["value"][1]) for r in results)
+            return round(total, 3)
+        return 0.0
+    except Exception:
+        return None   # None = Prometheus unreachable
+
+
 @app.route('/')
 @REQUEST_TIME.time()
 def home():
@@ -1003,6 +1041,7 @@ def home():
     request_value += 1
 
     error_color = '#dc2626' if error_value > 0 else '#0f172a'
+    req_rate    = _fetch_req_rate()   # live from Prometheus
 
     res = render_template_string(
         HTML_PAGE,
@@ -1012,6 +1051,7 @@ def home():
         uptime           = get_uptime(),
         refresh_interval = random.randint(8, 15),
         error_color      = error_color,
+        req_rate         = req_rate,
     )
 
     REQUEST_LATENCY.labels(method=request.method, endpoint='/').observe(time.time() - start)
@@ -1039,15 +1079,7 @@ def error_route():
     return {"error": "Simulated 500 error"}, 500
 
 
-@app.route('/slow')
-def slow():
-    global request_value
-    REQUEST_COUNT.labels(endpoint='/slow').inc()
-    request_value += 1
-    delay = random.uniform(0.8, 2.5)
-    time.sleep(delay)
-    REQUEST_LATENCY.labels(method=request.method, endpoint='/slow').observe(delay)
-    return {"status": "OK", "delay_ms": round(delay * 1000)}
+
 
 
 @app.route('/analyze')
@@ -1192,10 +1224,13 @@ def memory_stress():
     return {'status': 'done', 'items': result}
 
 @app.route('/slow')
-def slow_response():
-    # Simulates slow database query or API timeout
+def slow():
+    global request_value
+    REQUEST_COUNT.labels(endpoint='/slow').inc()
+    request_value += 1
     delay = random.uniform(2.0, 3.5)
     time.sleep(delay)
+    REQUEST_LATENCY.labels(method=request.method, endpoint='/slow').observe(delay)
     return {'status': 'slow', 'delay_seconds': round(delay, 2)}
 
 
