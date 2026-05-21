@@ -37,6 +37,7 @@ jobs:
           pip install prometheus-client
           pip install requests
           pip install pytest
+          pip install python-dotenv
 
       - name: Run tests
         run: |
