@@ -38,8 +38,61 @@ request_value = 0
 error_value   = 0
 START_TIME    = time.time()
 
-alert_history     = []
-MAX_ALERT_HISTORY = 20
+alert_history       = []
+MAX_ALERT_HISTORY   = 50          # increased so email history is richer
+_seen_alert_ids     = set()       # dedup: fingerprint+state pairs already logged
+
+ALERTMANAGER_URL    = "http://localhost:9093"
+
+# Map Alertmanager alert names to friendly descriptions
+_AM_DESCRIPTIONS = {
+    'AppDown':           'Flask application on port 5000 became unreachable — Alertmanager detected it was down.',
+    'HighCPUUsage':      'CPU usage exceeded 70% threshold for more than 30 seconds.',
+    'HighResponseLatency': 'Average response latency exceeded 500 ms for more than 30 seconds.',
+    'HighErrorRate':     'Error rate exceeded 0.05 errors/sec for more than 20 seconds.',
+    'TrafficSpike':      'Request rate spiked — traffic exceeded the normal 5-minute average significantly.',
+}
+
+
+def _poll_alertmanager():
+    """Background thread — polls Alertmanager every 30 s and syncs fired/resolved alerts."""
+    while True:
+        try:
+            res = requests.get(
+                f"{ALERTMANAGER_URL}/api/v2/alerts",
+                params={"active": "true", "silenced": "false", "inhibited": "false"},
+                timeout=3,
+            )
+            if res.status_code == 200:
+                for am_alert in res.json():
+                    labels      = am_alert.get("labels", {})
+                    alert_name  = labels.get("alertname", "Unknown Alert")
+                    severity    = labels.get("severity", "warning").lower()
+                    status      = am_alert.get("status", {}).get("state", "active")
+                    fingerprint = am_alert.get("fingerprint", alert_name)
+
+                    # Use fingerprint+status as dedup key so FIRING and RESOLVED both log once
+                    dedup_key = f"{fingerprint}:{status}"
+                    if dedup_key in _seen_alert_ids:
+                        continue
+                    _seen_alert_ids.add(dedup_key)
+
+                    # Keep the set from growing forever
+                    if len(_seen_alert_ids) > 500:
+                        _seen_alert_ids.clear()
+
+                    description = (
+                        am_alert.get("annotations", {}).get("description")
+                        or _AM_DESCRIPTIONS.get(alert_name, f"Alertmanager fired: {alert_name}")
+                    )
+
+                    source_label = "Alertmanager" if status == "active" else "Alertmanager (Resolved)"
+                    add_alert(source_label, alert_name, severity, description)
+
+        except Exception:
+            pass   # Alertmanager may not be running — silently skip
+
+        time.sleep(30)
 
 
 def add_alert(source, name, severity, description):
@@ -50,7 +103,7 @@ def add_alert(source, name, severity, description):
         'severity':    severity,
         'description': description,
     })
-    if len(alert_history) > MAX_ALERT_HISTORY:
+    while len(alert_history) > MAX_ALERT_HISTORY:
         alert_history.pop()
 
 
@@ -878,7 +931,10 @@ ALERTS_PAGE = """
       padding: 2px 10px; border-radius: 999px;
     }
 
-    .tag-source   { background: #f1f5f9; color: #475569; }
+    .tag-source        { background: #f1f5f9; color: #475569; }
+    .tag-source-am     { background: #f5f3ff; color: #6d28d9; border: 1px solid #ddd6fe; }
+    .tag-source-pred   { background: #ecfeff; color: #0e7490; border: 1px solid #a5f3fc; }
+    .tag-source-manual { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
     .tag-critical { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
     .tag-warning  { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
     .tag-info     { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
@@ -974,8 +1030,16 @@ ALERTS_PAGE = """
     <div class="box-title">📋 Alert Log — Last {{ alerts|length }} events</div>
 
     {% if alerts %}
-    <div style="font-size:13px; color:#64748b; margin-bottom:14px;">
-      Showing <strong>{{ alerts|length }}</strong> alert(s) · newest first
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; flex-wrap:wrap; gap:8px;">
+      <div style="font-size:13px; color:#64748b;">
+        Showing <strong>{{ alerts|length }}</strong> alert(s) · newest first
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <span class="meta-tag tag-source-am">🔔 Alertmanager</span>
+        <span class="meta-tag tag-source-pred">🔮 Predictive</span>
+        <span class="meta-tag tag-source-manual">⚡ Manual Trigger</span>
+        <span class="meta-tag tag-source-manual" style="background:#f0fdf4;color:#15803d;border-color:#bbf7d0;">✉️ Test Button</span>
+      </div>
     </div>
 
     {% for alert in alerts %}
@@ -985,7 +1049,17 @@ ALERTS_PAGE = """
         <div class="alert-name">{{ alert.name }}</div>
         <div class="alert-desc">{{ alert.description }}</div>
         <div class="alert-meta">
-          <span class="meta-tag tag-source">{{ alert.source }}</span>
+          {% if 'Alertmanager' in alert.source %}
+            <span class="meta-tag tag-source-am">🔔 {{ alert.source }}</span>
+          {% elif 'Predictive' in alert.source or 'predictor' in alert.source.lower() %}
+            <span class="meta-tag tag-source-pred">🔮 {{ alert.source }}</span>
+          {% elif 'Manual' in alert.source %}
+            <span class="meta-tag tag-source-manual">⚡ {{ alert.source }}</span>
+          {% elif 'Test' in alert.source %}
+            <span class="meta-tag" style="background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;">✉️ {{ alert.source }}</span>
+          {% else %}
+            <span class="meta-tag tag-source">{{ alert.source }}</span>
+          {% endif %}
           <span class="meta-tag tag-{{ alert.severity }}">{{ alert.severity|upper }}</span>
         </div>
       </div>
@@ -1125,11 +1199,13 @@ def predict():
 
 @app.route('/alerts', methods=['GET'])
 def alerts():
+    toast = getattr(app, '_pending_toast', None)
+    app._pending_toast = None
     return render_template_string(
         ALERTS_PAGE,
         alerts       = alert_history,
         current_time = datetime.now().strftime("%H:%M:%S"),
-        toast        = None,
+        toast        = toast,
     )
 
 
@@ -1179,10 +1255,10 @@ def alerts_trigger():
 
     elif action == 'test':
         try:
-            from mailer import send_alert_email
-            send_alert_email('cpu', 'CPU Usage', 45.0, 72.0, 88.0, 80.0, '%', 'warning')
+            from mailer import send_test_email
+            send_test_email()
             add_alert('Test Button', 'Test Alert Email Sent', 'info',
-                      'Manual test email sent to subhash6609@yahoo.com successfully.')
+                      'Test email sent to subhash6609@yahoo.com — confirms email delivery is working.')
             toast = {'type': 'success', 'icon': '✉️',
                      'title': 'Test Email Sent', 'msg': 'Check subhash6609@yahoo.com inbox'}
         except Exception as e:
@@ -1190,12 +1266,16 @@ def alerts_trigger():
                       f'Email send failed: {str(e)}')
             toast = {'type': 'error', 'icon': '❌', 'title': 'Email Failed', 'msg': str(e)}
 
-    return render_template_string(
-        ALERTS_PAGE,
-        alerts       = alert_history,
-        current_time = datetime.now().strftime("%H:%M:%S"),
-        toast        = toast,
-    )
+    # Store toast so /alerts can show it after redirect
+    app._pending_toast = toast
+    from flask import redirect, url_for
+    return redirect(url_for('alerts'))
+
+
+@app.route('/alerts/trigger', methods=['GET'])
+def alerts_trigger_get():
+    from flask import redirect, url_for
+    return redirect(url_for('alerts'))
 
 @app.route('/cpu-stress')
 def cpu_stress():
@@ -1242,5 +1322,9 @@ def metrics():
 if __name__ == '__main__':
     t = threading.Thread(target=start_prediction_loop, daemon=True)
     t.start()
-    print("[app] started — predictor running in background")
+
+    am_thread = threading.Thread(target=_poll_alertmanager, daemon=True)
+    am_thread.start()
+
+    print("[app] started — predictor + Alertmanager poller running in background")
     app.run(host='0.0.0.0', port=5000, debug=False)

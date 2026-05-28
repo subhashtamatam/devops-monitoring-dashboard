@@ -190,6 +190,28 @@ def _check_and_alert(predictions):
                 severity  = severity,
             )
             last_alert_sent[metric] = now
+
+            # Also log into the Flask dashboard alert history
+            try:
+                import app as flask_app
+                unit   = pred['unit']
+                cur    = pred['current']
+                p2     = pred['pred_2min']
+                thresh = pred['threshold']
+                flask_app.add_alert(
+                    source      = 'Predictive System',
+                    name        = f"Predicted {pred['label']} Breach",
+                    severity    = severity,
+                    description = (
+                        f"Linear regression forecasts {pred['label']} reaching "
+                        f"{p2:.2f}{unit} in 2 min (threshold: {thresh}{unit}). "
+                        f"Current value: {cur:.2f}{unit}. "
+                        f"Proactive email alert sent."
+                    ),
+                )
+            except Exception:
+                pass   # app not yet loaded — skip history entry
+
         except Exception as e:
             print(f"[mailer] failed for {metric}: {e}")
 
@@ -201,4 +223,4 @@ def start_prediction_loop():
             run_predictions()
         except Exception as e:
             print(f"[predictor] error: {e}")
-        time.sleep(COLLECTION_INTERVAL)	
+        time.sleep(COLLECTION_INTERVAL)
