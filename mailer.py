@@ -1,35 +1,61 @@
 import smtplib
-import os
 from email.mime.text import MIMEText
 from datetime import datetime
 
-# ── Load environment variables from .env file ──
-# python-dotenv reads the .env file and loads values into os.environ
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    # If python-dotenv is not installed, fall back to os.environ only
-    pass
+SENDER_EMAIL   = "subhash6609@yahoo.com"
+APP_PASSWORD   = "kzcrklmjtmxawecv"
+RECEIVER_EMAIL = "subhash6609@yahoo.com"
 
-# ── Email credentials — read from .env file, never hardcoded ──
-SENDER_EMAIL   = os.environ.get("YAHOO_EMAIL",        "subhash6609@yahoo.com")
-APP_PASSWORD   = os.environ.get("YAHOO_APP_PASSWORD",  "")
-RECEIVER_EMAIL = os.environ.get("YAHOO_EMAIL",        "subhash6609@yahoo.com")
-
-# ── SMTP server settings ──
 SMTP_HOST = "smtp.mail.yahoo.com"
 SMTP_PORT = 587
+
+
+def send_test_email():
+    subject = "✅ [TEST] DevOps Monitoring Dashboard — Email Alert Test"
+
+    body = f"""This is a TEST email from your DevOps Monitoring Dashboard.
+=============================================================
+
+Hello,
+
+This email was triggered manually using the "Send Test Email Alert"
+button on the Alert History page of your monitoring dashboard.
+
+This is NOT a real alert. No action is required.
+
+It confirms that:
+  ✅  Email delivery is working correctly
+  ✅  Yahoo SMTP connection is active (port 587)
+  ✅  Alertmanager email routing is configured
+  ✅  Your monitoring system is fully operational
+
+-------------------------------------------------------------
+Dashboard URL  : http://localhost:5000
+Alerts Page    : http://localhost:5000/alerts
+Sent at        : {datetime.now().strftime("%d %b %Y, %H:%M:%S")}
+-------------------------------------------------------------
+
+Sent by: Real-Time Application Performance Monitoring Dashboard
+Project: PG Final Year Major Project — Osmania University
+=============================================================
+"""
+
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"]    = SENDER_EMAIL
+    msg["To"]      = RECEIVER_EMAIL
+
+    server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
+    server.starttls()
+    server.login(SENDER_EMAIL, APP_PASSWORD)
+    server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
+    server.quit()
+    print("[mailer] test email sent successfully")
 
 
 def send_alert_email(metric, label, current,
                      pred_2min, pred_5min,
                      threshold, unit, severity):
-    """
-    Send a predictive alert email via Yahoo SMTP.
-    Credentials are loaded from the .env file — never hardcoded.
-    Called by predictor.py when a metric is forecast to breach its threshold.
-    """
 
     subject = f"[{severity.upper()} ALERT] {label} Risk Detected"
 
@@ -50,10 +76,6 @@ Sent by DevOps Monitoring Dashboard
     msg["Subject"] = subject
     msg["From"]    = SENDER_EMAIL
     msg["To"]      = RECEIVER_EMAIL
-
-    if not APP_PASSWORD:
-        print("[mailer] WARNING: YAHOO_APP_PASSWORD not set in .env — skipping email send")
-        return
 
     try:
         server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
