@@ -35,3 +35,9 @@ grafana_data/
 # ── OS files ──
 .DS_Store
 Thumbs.db
+
+#── Prometheus & Alertmanager binaries (never commit) ──
+prometheus/
+alertmanager/
+alertmanager-*.tar.gz
+*.tar.gz

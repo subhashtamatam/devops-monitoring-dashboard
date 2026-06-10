@@ -1,10 +1,14 @@
+from dotenv import load_dotenv
+import os
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
 
-SENDER_EMAIL   = "subhash6609@yahoo.com"
-APP_PASSWORD   = "kzcrklmjtmxawecv"
-RECEIVER_EMAIL = "subhash6609@yahoo.com"
+load_dotenv()
+
+SENDER_EMAIL   = os.environ.get('YAHOO_EMAIL',        'subhash6609@yahoo.com')
+APP_PASSWORD   = os.environ.get('YAHOO_APP_PASSWORD', '')
+RECEIVER_EMAIL = os.environ.get('YAHOO_EMAIL',        'subhash6609@yahoo.com')
 
 SMTP_HOST = "smtp.mail.yahoo.com"
 SMTP_PORT = 587
