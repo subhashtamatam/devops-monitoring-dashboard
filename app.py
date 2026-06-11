@@ -1,13 +1,16 @@
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, redirect, url_for, session
 from analyzer import run_analysis
 from predictor import start_prediction_loop, latest_predictions
 from prometheus_client import Counter, Summary, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from datetime import datetime
 import math, random, time
 import threading
+import time
+import random
 import requests
 
 app = Flask(__name__)
+app.secret_key = 'devops-monitor-secret-key-change-in-production'
 
 REQUEST_COUNT = Counter(
     'app_requests_total',
@@ -37,7 +40,7 @@ error_value   = 0
 START_TIME    = time.time()
 
 alert_history     = []
-MAX_ALERT_HISTORY = 50
+MAX_ALERT_HISTORY = 20
 
 
 def add_alert(source, name, severity, description):
@@ -2334,11 +2337,12 @@ def predict():
 
 @app.route('/alerts', methods=['GET'])
 def alerts():
+    toast = session.pop('toast', None)
     return render_template_string(
         ALERTS_PAGE,
         alerts       = alert_history,
         current_time = datetime.now().strftime("%H:%M:%S"),
-        toast        = None,
+        toast        = toast,
     )
 
 
@@ -2399,12 +2403,8 @@ def alerts_trigger():
                       f'Email send failed: {str(e)}')
             toast = {'type': 'error', 'icon': '❌', 'title': 'Email Failed', 'msg': str(e)}
 
-    return render_template_string(
-        ALERTS_PAGE,
-        alerts       = alert_history,
-        current_time = datetime.now().strftime("%H:%M:%S"),
-        toast        = toast,
-    )
+    session['toast'] = toast
+    return redirect(url_for('alerts'))
 
 
 @app.route('/cpu-stress')
@@ -2802,6 +2802,10 @@ INFRA_PAGE = """
 
 <footer>
   <span>Infrastructure Status &middot; PG Final Year Major Project</span>
+</main>
+
+<footer>
+  <span>Infrastructure Status &middot; PG Final Year Major Project</span>
   <span>Last checked: {{ current_time }}</span>
 </footer>
 
@@ -2906,48 +2910,8 @@ def grafana():
     )
 
 
-@app.route('/sustained-errors')
-def sustained_errors():
-    """Fires 20 errors with a short delay between each — produces a visible
-    rate spike in Grafana's rate(app_errors_total[1m]) panel."""
-    global error_value
-    for _ in range(20):
-        REQUEST_COUNT.labels(endpoint='/error').inc()
-        ERROR_COUNT.labels(endpoint='/error').inc()
-        error_value += 1
-        time.sleep(0.3)
-    return {'status': 'done', 'errors_fired': 20}
-
-
-def _poll_alertmanager():
-    """Background thread — polls Alertmanager API every 30 seconds and
-    pushes any currently-firing alerts into the in-memory alert_history."""
-    import requests as _req
-    while True:
-        try:
-            res = _req.get(
-                'http://localhost:9093/api/v2/alerts',
-                params={'active': 'true', 'silenced': 'false'},
-                timeout=3
-            )
-            if res.status_code == 200:
-                for a in res.json():
-                    name     = a.get('labels', {}).get('alertname', 'Unknown')
-                    severity = a.get('labels', {}).get('severity', 'warning')
-                    desc     = a.get('annotations', {}).get('description', 'Alert is firing.')
-                    # avoid duplicate entries — skip if same alert already in history
-                    if not any(h['name'] == name and h['source'] == 'Alertmanager'
-                               for h in alert_history[:5]):
-                        add_alert('Alertmanager', name, severity, desc)
-        except Exception:
-            pass
-        time.sleep(30)
-
-
 if __name__ == '__main__':
     t = threading.Thread(target=start_prediction_loop, daemon=True)
     t.start()
-    t2 = threading.Thread(target=_poll_alertmanager, daemon=True)
-    t2.start()
-    print("[app] started — predictor + alertmanager poller running in background")
+    print("[app] started — predictor running in background")
     app.run(host='0.0.0.0', port=5000, debug=False)
