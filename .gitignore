@@ -41,3 +41,5 @@ prometheus/
 alertmanager/
 alertmanager-*.tar.gz
 *.tar.gz
+*.pid
+logs/*.pid
