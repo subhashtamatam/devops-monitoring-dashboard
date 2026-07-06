@@ -8,23 +8,47 @@ import threading
 import requests
 import os
 import secrets
+from functools import wraps
+from werkzeug.security import check_password_hash
 from dotenv import load_dotenv
 import alert_store
+import login_security
 
 load_dotenv()
 
 app = Flask(__name__)
 
-_secret_key = os.environ.get('FLASK_SECRET_KEY')
-if not _secret_key:
-    _secret_key = secrets.token_hex(32)
+# A fresh random secret key is generated every time the app starts —
+# intentionally, not a fallback. Since Flask signs session cookies with
+# this key, any browser session from before a restart becomes invalid the
+# moment the key changes, forcing a fresh login every time the server is
+# stopped and started. This is a deliberate security choice for a
+# monitoring dashboard, not an oversight.
+app.secret_key = secrets.token_hex(32)
+
+login_security.init_db()
+
+ADMIN_USERNAME      = os.environ.get('ADMIN_USERNAME', '')
+ADMIN_PASSWORD_HASH = os.environ.get('ADMIN_PASSWORD_HASH', '')
+if not ADMIN_USERNAME or not ADMIN_PASSWORD_HASH:
     print(
-        "[app] WARNING: FLASK_SECRET_KEY not set in .env — using a random "
-        "key generated for this run only. Sessions will not persist across "
-        "restarts. Add FLASK_SECRET_KEY=<random value> to your .env file "
-        "for a stable key."
+        "[app] WARNING: ADMIN_USERNAME / ADMIN_PASSWORD_HASH not set in .env "
+        "— the dashboard login will reject all attempts until these are "
+        "set. Run generate_admin_password.py to create credentials."
     )
-app.secret_key = _secret_key
+
+
+def login_required(view_func):
+    """Redirects to /login if the user hasn't authenticated. Only applied
+    to human-facing dashboard pages — /metrics, /health, and the stress
+    test endpoints stay open since Prometheus, health checks, and
+    stress_test.py can't 'log in'."""
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login', next=request.path))
+        return view_func(*args, **kwargs)
+    return wrapped
 
 REQUEST_COUNT = Counter(
     'app_requests_total',
@@ -421,6 +445,223 @@ DARK_MODE_SCRIPT = """
 </script>
 """
 
+LOGIN_PAGE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <script>if(localStorage.getItem('devops-dark-mode')==='true')document.documentElement.classList.add('dark');</script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Sign In — Application Monitoring</title>
+  <style>
+    """ + SHARED_CSS + """
+
+    .page {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 48px 24px; gap: 32px;
+    }
+
+    .page-title { text-align: center; }
+    .page-title h2 {
+      font-size: 30px; font-weight: 800; color: #0f172a;
+      letter-spacing: -1px;
+      background: linear-gradient(135deg, #0f172a 40%, #6366f1);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .page-title p { font-size: 13px; color: var(--text-muted); margin-top: 8px; }
+    html.dark .page-title h2 {
+      background: linear-gradient(135deg, #f1f5f9 40%, #818cf8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .cards { display: grid; grid-template-columns: repeat(3, 165px); gap: 14px; }
+
+    .card {
+      background: #ffffff; border: 1px solid #e2e8f0;
+      border-radius: 16px; padding: 22px 20px;
+      position: relative; overflow: hidden;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.07), 0 10px 30px -5px rgba(0,0,0,0.07);
+      animation: slideCard 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+      opacity: 0;
+    }
+    .card:nth-child(1) { animation-delay: 0.05s; }
+    .card:nth-child(2) { animation-delay: 0.15s; }
+    .card:nth-child(3) { animation-delay: 0.25s; }
+    @keyframes slideCard {
+      from { opacity: 0; transform: translateY(20px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0;
+      height: 3px; border-radius: 16px 16px 0 0;
+    }
+    .card-status::before { background: linear-gradient(90deg, #10b981, #34d399); }
+    .card-uptime::before { background: linear-gradient(90deg, #0ea5e9, #38bdf8); }
+    .card-req::before    { background: linear-gradient(90deg, #6366f1, #a78bfa); }
+    .card-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1.3px; color: #94a3b8; margin-bottom: 12px;
+    }
+    .card-value {
+      font-family: 'DM Mono', monospace; font-size: 22px; font-weight: 700;
+      line-height: 1; color: #0f172a; letter-spacing: -1px;
+    }
+    .card-status .card-value { font-family: 'Inter', sans-serif; color: #10b981; font-size: 15px; font-weight: 700; }
+    .card-bg-glow {
+      position: absolute; bottom: -16px; right: -16px;
+      width: 64px; height: 64px; border-radius: 50%; pointer-events: none;
+    }
+    .card-status .card-bg-glow { background: radial-gradient(circle, var(--green-glow) 0%, transparent 70%); }
+    .card-uptime .card-bg-glow { background: radial-gradient(circle, var(--cyan-glow)  0%, transparent 70%); }
+    .card-req .card-bg-glow    { background: radial-gradient(circle, var(--indigo-glow)0%, transparent 70%); }
+
+    .heartbeat-svg { position: absolute; bottom: 6px; left: 0; width: 100%; height: 22px; opacity: 0.5; }
+    @media (prefers-reduced-motion: reduce) { .heartbeat-line { animation: none !important; } }
+    .heartbeat-line { stroke-dasharray: 300; stroke-dashoffset: 300; animation: draw-heartbeat 2.4s ease-in-out infinite; }
+    @keyframes draw-heartbeat { to { stroke-dashoffset: 0; } }
+
+    .login-box {
+      max-width: 380px; width: 100%;
+    }
+    .login-field { text-align: left; margin-bottom: 16px; }
+    .login-label {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.8px; color: var(--text-dim); margin-bottom: 6px;
+      display: block;
+    }
+    .login-input {
+      width: 100%; padding: 11px 14px; border-radius: 8px;
+      border: 1px solid var(--border); font-size: 14px;
+      background: var(--surface-2); color: var(--text);
+      font-family: 'Inter', sans-serif;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .login-input:focus {
+      outline: none; border-color: var(--cyan);
+      box-shadow: 0 0 0 3px var(--cyan-dim);
+    }
+    .login-submit-btn {
+      width: 100%; justify-content: center; margin-top: 6px;
+      cursor: pointer; font-family: 'Inter', sans-serif;
+      padding: 12px; border-radius: 10px; border: none;
+      background: linear-gradient(135deg, #0ea5e9, #6366f1);
+      color: #ffffff; font-weight: 700; font-size: 14.5px;
+      box-shadow: 0 4px 14px rgba(14,165,233,0.3);
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .login-submit-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 22px rgba(14,165,233,0.4);
+    }
+    .login-submit-btn:focus-visible {
+      outline: 2px solid var(--cyan); outline-offset: 2px;
+    }
+    .login-error {
+      background: #fef2f2; border: 1px solid #fecaca; color: #dc2626;
+      padding: 10px 14px; border-radius: 8px; font-size: 12.5px;
+      margin-bottom: 18px; text-align: left;
+    }
+    .login-caption {
+      font-size: 11.5px; color: var(--text-dim); margin-top: 20px; text-align: center;
+    }
+    html.dark .login-input { background: var(--surface-2); border-color: var(--border); color: var(--text); }
+    html.dark .login-error { background: #1c0505; border-color: #7f1d1d; color: #fca5a5; }
+  </style>
+</head>
+<body>
+
+<header>
+  <a class="brand" href="/">
+    <div class="brand-logo">📡</div>
+    <div class="brand-name">Application <span>Monitoring</span></div>
+  </a>
+  <div class="header-right">
+    <div class="live-pill"><div class="live-dot"></div>LIVE</div>
+    <button class="dark-toggle" id="darkToggle" title="Toggle dark mode" onclick="toggleDark()">🌙</button>
+    <div class="time-box">{{ current_time }}</div>
+  </div>
+</header>
+
+<div class="page">
+  <div class="page-title">
+    <h2>🔐 Sign In</h2>
+    <p>Access is limited to project administrators and reviewers.</p>
+  </div>
+
+  <div class="cards" style="grid-template-columns: repeat(2, 200px);">
+    <div class="card card-status">
+      <div class="card-label">System Status</div>
+      <div class="card-value">● RUNNING</div>
+      <div class="card-bg-glow"></div>
+      <svg class="heartbeat-svg" viewBox="0 0 160 22" preserveAspectRatio="none">
+        <polyline class="heartbeat-line" points="0,11 55,11 63,3 71,19 79,11 160,11"
+                  fill="none" stroke="#10b981" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <div class="card card-uptime">
+      <div class="card-label">Uptime</div>
+      <div class="card-value">{{ uptime }}</div>
+      <div class="card-bg-glow"></div>
+    </div>
+  </div>
+
+  <div class="box login-box">
+    <div class="box-title">🔑 Enter Your Credentials</div>
+    {% if error %}
+    <div class="login-error">⚠ {{ error }}</div>
+    {% endif %}
+    <form method="POST">
+      <div class="login-field">
+        <label class="login-label">Username</label>
+        <input class="login-input" type="text" name="username" required autofocus autocomplete="username">
+      </div>
+      <div class="login-field">
+        <label class="login-label">Password</label>
+        <input class="login-input" type="password" name="password" required autocomplete="current-password">
+      </div>
+      <button class="login-submit-btn" type="submit">Sign In</button>
+    </form>
+    <div class="login-caption">Every login is rate-limited after repeated failed attempts.</div>
+  </div>
+</div>
+
+<footer>
+  <span>Real-Time Application Performance Monitoring Dashboard &middot; PG Final Year Major Project</span>
+  <span>{{ current_time }}</span>
+</footer>
+
+<script>
+  function toggleDark() {
+    var html = document.documentElement;
+    var btn  = document.getElementById('darkToggle');
+    if (html.classList.contains('dark')) {
+      html.classList.remove('dark');
+      localStorage.setItem('devops-dark-mode', 'false');
+      if (btn) btn.textContent = '🌙';
+    } else {
+      html.classList.add('dark');
+      localStorage.setItem('devops-dark-mode', 'true');
+      if (btn) btn.textContent = '☀️';
+    }
+  }
+  (function() {
+    var btn = document.getElementById('darkToggle');
+    if (btn && document.documentElement.classList.contains('dark')) {
+      btn.textContent = '☀️';
+    }
+  })();
+</script>
+
+</body>
+</html>
+"""
+
+
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -737,6 +978,7 @@ HTML_PAGE = """
       <a class="nav-btn" href="/grafana">Grafana</a>
     </div>
     <div class="live-pill"><div class="live-dot"></div>LIVE</div>
+    <a class="nav-btn" href="/logout" style="color:#dc2626;">Logout</a>
     <button class="dark-toggle" id="darkToggle" title="Toggle dark mode" onclick="toggleDark()">🌙</button>
     <div class="time-box">{{ current_time }}</div>
   </div>
@@ -1196,6 +1438,7 @@ ANALYZE_PAGE = """
       <a class="nav-btn" href="/grafana">Grafana</a>
     </div>
     <div class="live-pill"><div class="live-dot"></div>LIVE</div>
+    <a class="nav-btn" href="/logout" style="color:#dc2626;">Logout</a>
     <button class="dark-toggle" id="darkToggle" title="Toggle dark mode" onclick="toggleDark()">🌙</button>
     <div class="time-box">{{ current_time }}</div>
   </div>
@@ -1502,6 +1745,7 @@ PREDICT_PAGE = """
       <a class="nav-btn" href="/grafana">Grafana</a>
     </div>
     <div class="live-pill"><div class="live-dot"></div>LIVE</div>
+    <a class="nav-btn" href="/logout" style="color:#dc2626;">Logout</a>
     <button class="dark-toggle" id="darkToggle" title="Toggle dark mode" onclick="toggleDark()">🌙</button>
     <div class="time-box">{{ current_time }}</div>
   </div>
@@ -1868,6 +2112,7 @@ ALERTS_PAGE = """
       <a class="nav-btn" href="/grafana">Grafana</a>
     </div>
     <div class="live-pill"><div class="live-dot"></div>LIVE</div>
+    <a class="nav-btn" href="/logout" style="color:#dc2626;">Logout</a>
     <button class="dark-toggle" id="darkToggle" title="Toggle dark mode" onclick="toggleDark()">🌙</button>
     <div class="time-box">{{ current_time }}</div>
   </div>
@@ -2106,6 +2351,7 @@ GRAFANA_PAGE = """
       <a class="nav-btn active" href="/grafana">Grafana</a>
     </div>
     <div class="live-pill"><div class="live-dot"></div>LIVE</div>
+    <a class="nav-btn" href="/logout" style="color:#dc2626;">Logout</a>
     <button class="dark-toggle" id="darkToggle" title="Toggle dark mode" onclick="toggleDark()">🌙</button>
     <div class="time-box">{{ current_time }}</div>
   </div>
@@ -2254,7 +2500,52 @@ def _calculate_health_score(metrics):
     return score, color
 
 
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if session.get('logged_in'):
+        return redirect(url_for('home'))
+
+    error = None
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+
+        is_locked, remaining, attempts = login_security.get_lockout_status(username)
+
+        if is_locked:
+            mins, secs = divmod(remaining, 60)
+            error = f"Too many failed attempts. Try again in {mins}m {secs}s."
+        else:
+            valid_user = ADMIN_USERNAME and username == ADMIN_USERNAME
+            valid_pass = ADMIN_PASSWORD_HASH and check_password_hash(ADMIN_PASSWORD_HASH, password)
+
+            if valid_user and valid_pass:
+                login_security.clear_failed_attempts(username)
+                session['logged_in'] = True
+                session['username'] = username
+                next_path = request.args.get('next') or url_for('home')
+                return redirect(next_path)
+            else:
+                login_security.record_failed_attempt(username)
+                error = "Incorrect username or password."
+
+    return render_template_string(
+        LOGIN_PAGE,
+        error        = error,
+        uptime       = get_uptime(),
+        count        = request_value,
+        current_time = datetime.now().strftime("%H:%M:%S"),
+    )
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+
 @app.route('/')
+@login_required
 @REQUEST_TIME.time()
 def home():
     global request_value
@@ -2278,7 +2569,7 @@ def home():
         errors           = error_value,
         current_time     = datetime.now().strftime("%H:%M:%S"),
         uptime           = get_uptime(),
-        refresh_interval = random.randint(8, 15),
+        refresh_interval = random.randint(5, 10),
         error_color      = error_color,
         req_rate         = req_rate,
  	initial_score = initial_score,
@@ -2311,6 +2602,7 @@ def error_route():
 
 
 @app.route('/analyze')
+@login_required
 def analyze():
     result = run_analysis()
 
@@ -2339,6 +2631,7 @@ def analyze():
 
 
 @app.route('/predict')
+@login_required
 def predict():
     import predictor as p
     preds = p.latest_predictions
@@ -2352,6 +2645,7 @@ def predict():
 
 
 @app.route('/alerts', methods=['GET'])
+@login_required
 def alerts():
     toast = session.pop('toast', None)
     return render_template_string(
@@ -2363,6 +2657,7 @@ def alerts():
 
 
 @app.route('/alerts/trigger', methods=['POST'])
+@login_required
 def alerts_trigger():
     global request_value, error_value
 
@@ -2464,6 +2759,7 @@ def metrics():
     return generate_latest(), 200, {'Content-Type': CONTENT_TYPE_LATEST}
 
 @app.route('/api/health-score')
+@login_required
 def api_health_score():
     try:
         from analyzer import fetch_all_metrics
@@ -2623,6 +2919,7 @@ INFRA_PAGE = """
       <a class="nav-btn" href="/grafana">Grafana</a>
     </div>
     <div class="live-pill"><div class="live-dot"></div>LIVE</div>
+    <a class="nav-btn" href="/logout" style="color:#dc2626;">Logout</a>
     <button class="dark-toggle" id="darkToggle" title="Toggle dark mode" onclick="toggleDark()">🌙</button>
     <div class="time-box">{{ current_time }}</div>
   </div>
@@ -2885,6 +3182,7 @@ def _check_service(url, timeout=2):
 
 
 @app.route('/infrastructure')
+@login_required
 def infrastructure():
     services_config = [
         {'name': 'Flask Primary',  'url': 'http://localhost:5000/health', 'display': 'localhost:5000', 'icon': '🐍', 'role': 'Monitored app + Dashboard UI'},
@@ -2919,6 +3217,7 @@ def infrastructure():
 
 
 @app.route('/grafana')
+@login_required
 def grafana():
     return render_template_string(
         GRAFANA_PAGE,

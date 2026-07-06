@@ -1,9 +1,16 @@
 .env
 
+# ── Generated Alertmanager config (contains real SMTP password) ──
 alertmanager.yml
 
 # ── Persistent alert history database (runtime data, not source) ──
 alerts.db
+
+# ── Dashboard login — user accounts and rate-limiting data ──
+# users.json contains password hashes; login_security.db tracks failed
+# login attempts. Neither should ever be committed.
+users.json
+login_security.db
 
 # ── Python cache files ──
 __pycache__/
