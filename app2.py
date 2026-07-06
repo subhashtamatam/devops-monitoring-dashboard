@@ -51,13 +51,7 @@ def get_uptime():
 
 
 # ── Backup workload simulation ──
-# The backup node runs on comparatively weaker / lower-priority hardware in
-# this architecture (it only takes ~1/3 of Nginx's weighted traffic). Rather
-# than faking that with a flat sleep(), we do real CPU-bound work so that
-# process_cpu_seconds_total actually reflects it -- CPU% and latency panels
-# stay consistent with each other, the way they would on a genuinely
-# resource-constrained secondary server. Latency also degrades slightly
-# under concurrent load, simulating fewer available CPU cores than Primary.
+
 _active_requests = 0
 _active_requests_lock = threading.Lock()
 
