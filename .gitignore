@@ -2,6 +2,9 @@
 
 alertmanager.yml
 
+# ── Persistent alert history database (runtime data, not source) ──
+alerts.db
+
 # ── Python cache files ──
 __pycache__/
 *.py[cod]

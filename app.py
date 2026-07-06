@@ -9,6 +9,7 @@ import requests
 import os
 import secrets
 from dotenv import load_dotenv
+import alert_store
 
 load_dotenv()
 
@@ -60,20 +61,14 @@ request_value = 0
 error_value   = 0
 START_TIME    = time.time()
 
-alert_history     = []
-MAX_ALERT_HISTORY = 50
+# Alert history is now persisted in SQLite via alert_store.py instead of
+# an in-memory list — it survives Flask restarts. init_db() is safe to
+# call every startup; it only creates the table if it doesn't exist yet.
+alert_store.init_db()
 
 
 def add_alert(source, name, severity, description):
-    alert_history.insert(0, {
-        'time':        datetime.now().strftime("%d %b %Y, %H:%M:%S"),
-        'source':      source,
-        'name':        name,
-        'severity':    severity,
-        'description': description,
-    })
-    if len(alert_history) > MAX_ALERT_HISTORY:
-        alert_history.pop()
+    alert_store.add_alert(source, name, severity, description)
 
 
 def get_uptime():
@@ -2361,7 +2356,7 @@ def alerts():
     toast = session.pop('toast', None)
     return render_template_string(
         ALERTS_PAGE,
-        alerts       = alert_history,
+        alerts       = alert_store.get_alerts(),
         current_time = datetime.now().strftime("%H:%M:%S"),
         toast        = toast,
     )
@@ -2946,7 +2941,7 @@ def sustained_errors():
 
 def _poll_alertmanager():
     """Background thread — polls Alertmanager API every 30 seconds and
-    pushes any currently-firing alerts into the in-memory alert_history."""
+    pushes any currently-firing alerts into the persistent alert history."""
     import requests as _req
     while True:
         try:
@@ -2960,8 +2955,7 @@ def _poll_alertmanager():
                     name     = a.get('labels', {}).get('alertname', 'Unknown')
                     severity = a.get('labels', {}).get('severity', 'warning')
                     desc     = a.get('annotations', {}).get('description', 'Alert is firing.')
-                    if not any(h['name'] == name and h['source'] == 'Alertmanager'
-                               for h in alert_history[:5]):
+                    if not alert_store.recent_alertmanager_alert_exists(name):
                         add_alert('Alertmanager', name, severity, desc)
         except Exception:
             pass
