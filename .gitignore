@@ -1,9 +1,6 @@
-# DevOps Monitoring Dashboard — .gitignore
-# Real-Time Application Performance Monitoring Dashboard
-# PG Final Year Major Project
-
-# ── Environment variables (NEVER commit .env — contains passwords) ──
 .env
+
+alertmanager.yml
 
 # ── Python cache files ──
 __pycache__/

@@ -6,9 +6,24 @@ from datetime import datetime
 import math, random, time
 import threading
 import requests
+import os
+import secrets
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = 'devops-monitor-secret-key-change-in-production'
+
+_secret_key = os.environ.get('FLASK_SECRET_KEY')
+if not _secret_key:
+    _secret_key = secrets.token_hex(32)
+    print(
+        "[app] WARNING: FLASK_SECRET_KEY not set in .env — using a random "
+        "key generated for this run only. Sessions will not persist across "
+        "restarts. Add FLASK_SECRET_KEY=<random value> to your .env file "
+        "for a stable key."
+    )
+app.secret_key = _secret_key
 
 REQUEST_COUNT = Counter(
     'app_requests_total',
@@ -32,6 +47,14 @@ ERROR_COUNT = Counter(
     'Total number of errors',
     ['endpoint']
 )
+
+# Pre-register label combinations so Prometheus reports 0 instead of
+# "no data" before the first real error/hit on each endpoint.
+REQUEST_COUNT.labels(endpoint='/').inc(0)
+REQUEST_COUNT.labels(endpoint='/health').inc(0)
+REQUEST_COUNT.labels(endpoint='/error').inc(0)
+REQUEST_COUNT.labels(endpoint='/analyze').inc(0)
+ERROR_COUNT.labels(endpoint='/error').inc(0)
 
 request_value = 0
 error_value   = 0

@@ -2,25 +2,38 @@ from flask import Flask, render_template_string, request
 from prometheus_client import Counter, Histogram, Summary, generate_latest, CONTENT_TYPE_LATEST
 from datetime import datetime
 import time
+import random
+import threading
  
 app = Flask(__name__)
  
 REQUEST_COUNT = Counter(
-    'app2_requests_total',
-    'Total requests on backup server',
+    'app_requests_total',
+    'Total requests',
     ['endpoint']
 )
  
 REQUEST_LATENCY = Histogram(
-    'app2_request_duration_seconds',
-    'Request latency on backup server',
+    'http_request_duration_seconds',
+    'Request latency',
     ['method', 'endpoint']
 )
  
 REQUEST_TIME = Summary(
-    'app2_processing_seconds',
-    'Time spent processing on backup server'
+    'request_processing_seconds',
+    'Time spent processing request'
 )
+
+ERROR_COUNT = Counter(
+    'app_errors_total',
+    'Total number of errors',
+    ['endpoint']
+)
+
+# Pre-register label combinations so Prometheus reports 0 instead of
+# "no data" before the first real hit on each endpoint.
+REQUEST_COUNT.labels(endpoint='/').inc(0)
+REQUEST_COUNT.labels(endpoint='/health').inc(0)
  
 request_value = 0
 START_TIME    = time.time()
@@ -35,6 +48,46 @@ def get_uptime():
     if m > 0:
         return f"{m}m {s}s"
     return f"{s}s"
+
+
+# ── Backup workload simulation ──
+# The backup node runs on comparatively weaker / lower-priority hardware in
+# this architecture (it only takes ~1/3 of Nginx's weighted traffic). Rather
+# than faking that with a flat sleep(), we do real CPU-bound work so that
+# process_cpu_seconds_total actually reflects it -- CPU% and latency panels
+# stay consistent with each other, the way they would on a genuinely
+# resource-constrained secondary server. Latency also degrades slightly
+# under concurrent load, simulating fewer available CPU cores than Primary.
+_active_requests = 0
+_active_requests_lock = threading.Lock()
+
+
+def simulate_backup_workload():
+    global _active_requests
+    with _active_requests_lock:
+        _active_requests += 1
+        current_load = _active_requests
+    try:
+        # Natural per-request baseline with jitter (gaussian, not uniform --
+        # real-world response times cluster around a mean with occasional
+        # outliers, they don't move in a flat random range).
+        base_duration = max(0.05, random.gauss(0.095, 0.02))
+
+        # Each additional concurrent request adds a small queuing penalty,
+        # simulating limited CPU cores compared to Primary.
+        load_penalty = 0.018 * (current_load - 1)
+        target_duration = base_duration + load_penalty
+
+        # Burn real CPU cycles for roughly target_duration seconds instead
+        # of idling, so the work actually shows up in CPU metrics.
+        end_time = time.time() + target_duration
+        x = 0
+        while time.time() < end_time:
+            x = (x * 1103515245 + 12345) % 2147483647
+    finally:
+        with _active_requests_lock:
+            _active_requests -= 1
+
  
  
 HTML_PAGE = """
@@ -324,6 +377,12 @@ def home():
     start = time.time()
     REQUEST_COUNT.labels(endpoint='/').inc()
     request_value += 1
+
+    # Backup server intentionally runs on lower-priority hardware in this
+    # architecture. simulate_backup_workload() does real CPU-bound work
+    # with natural jitter and load-dependent slowdown, so CPU and latency
+    # panels move together believably instead of a flat artificial delay.
+    simulate_backup_workload()
  
     res = render_template_string(
         HTML_PAGE,
